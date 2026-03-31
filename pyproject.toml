@@ -36,10 +36,11 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)"
 ]
 
-# Runtime dependencies
-dependencies = [
-  "pyeda>=0.29",
-]
+# Runtime dependencies (pyeda is optional, needed for boolean analysis)
+dependencies = []
+
+[project.optional-dependencies]
+analysis = ["pyeda>=0.29"]
 
 [project.urls]
 Homepage = "https://github.com/felixmiller/eduPAL"

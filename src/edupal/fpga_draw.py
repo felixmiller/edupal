@@ -20,6 +20,57 @@ from schemdraw.util import Point
 
 from .fpga import FpgaConfig
 
+# Font path candidates for New Computer Modern Sans Math
+_NEWCM_SANS_MATH_PATHS = [
+    '/usr/share/texlive/texmf-dist/fonts/opentype/public/newcomputermodern/NewCMSansMath-Regular.otf',          # Debian/Ubuntu apt
+    '/usr/local/texlive/2026/texmf-dist/fonts/opentype/public/newcomputermodern/NewCMSansMath-Regular.otf',     # texlive Docker image
+    '/usr/local/texlive/2025/texmf-dist/fonts/opentype/public/newcomputermodern/NewCMSansMath-Regular.otf',
+]
+
+
+def _find_math_font():
+    """Find NewCM Sans Math font on the system."""
+    import os
+    for path in _NEWCM_SANS_MATH_PATHS:
+        if os.path.exists(path):
+            return path
+    # Try kpsewhich as fallback (works with any texlive layout)
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['kpsewhich', 'NewCMSansMath-Regular.otf'],
+            capture_output=True, text=True, timeout=5)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def setup_svg_backend(math_font=None):
+    """Configure schemdraw SVG backend with ziamath font setup.
+
+    Call this before draw_fpga(). Sets up the SVG backend with
+    New CM Sans Math for math labels and DejaVu Sans for text.
+    Falls back to defaults if the font or ziamath is not available.
+
+    Args:
+        math_font: Path to OTF math font. Defaults to auto-detected NewCMSansMath.
+    """
+    schemdraw.use('svg')
+    if math_font is None:
+        math_font = _find_math_font()
+    try:
+        import ziamath
+        import ziafont
+        if math_font:
+            ziamath.config.math.mathfont = math_font
+        from ziamath.zmath import loadedtextfonts
+        loadedtextfonts['sans'] = ziafont.Font()
+    except ImportError:
+        pass  # ziamath not installed, SVG backend uses text mode
+
+
 # Drawing constants
 unit = 1
 linedist = unit / 2

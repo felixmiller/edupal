@@ -15,6 +15,7 @@ import schemdraw
 import schemdraw.elements as elm
 import schemdraw.flow as flow
 from schemdraw.elements.intcircuits import IcPin
+from schemdraw.segments import SegmentBezier
 from schemdraw.util import Point
 
 from .fpga import FpgaConfig
@@ -43,6 +44,9 @@ def make_clb(n_inputs=3):
     in_spacing = lut_total_h / (n_inputs + 1) / 2
     lut_box_pad = 0.1
 
+    # Address weight labels: MSB first (e.g., 4, 2, 1 for 3 inputs)
+    addr_weights = [2 ** (n_inputs - 1 - i) for i in range(n_inputs)]
+
     with schemdraw.Drawing(show=False, fontsize=12, unit=unit, lw=1) as dcell:
         origin = dcell.here
 
@@ -65,12 +69,13 @@ def make_clb(n_inputs=3):
         lut_mid_y = origin.y - lut_total_h / 2
         lut_right_x = origin.x + lut_total_w + lut_box_pad
 
-        # Input lead lines
+        # Input lead lines with address weight labels
         for i in range(n_inputs):
             y_in = origin.y - (i + 1) * in_spacing
             dcell.here = Point((origin.x - in_lead, y_in))
             dcell.set_anchor(f'in{i}')
-            elm.Line().right(in_lead - lut_box_pad)
+            elm.Line().right(in_lead - lut_box_pad).label(
+                str(addr_weights[i]), loc='left', ofst=(0, 0.12), fontsize=9)
 
         # LUT output -> fork
         dcell.here = Point((lut_right_x, lut_mid_y))
@@ -166,7 +171,7 @@ def draw_fpga(cfg, filename='fpga.svg', base_fig=False):
     h_bw = (h_wire_count - 1) * wire_pitch
     sb = max(max(v_bw), h_bw) + 2 * sb_pad
 
-    # X layout
+    # X layout: SB right edge aligns with CLB left edge, CLB right with next SB left
     v_cx = [0.0]
     clb_ox = []
     for c in range(n_clb_cols):
@@ -180,7 +185,11 @@ def draw_fpga(cfg, filename='fpga.svg', base_fig=False):
         clb_oy.append(h_cy[-1] - sb / 2 - ch_gap - bb.ymax)
         h_cy.append(clb_oy[-1] + bb.ymin - ch_gap - sb / 2)
 
-    with schemdraw.Drawing(file=filename, fontsize=10, unit=unit, lw=1) as d:
+    # Check for top/bottom I/O ports (non-corner interior SBs exist)
+    has_top_io = n_clb_cols > 1
+    has_bot_io = n_clb_cols > 1
+
+    with schemdraw.Drawing(file=filename, show=False, fontsize=10, unit=unit, lw=1) as d:
 
         # Place CLBs
         clbs = {}
@@ -206,8 +215,7 @@ def draw_fpga(cfg, filename='fpga.svg', base_fig=False):
                     y_bot = h_cy[hi + 1] + sb / 2
                     elm.Line().at((wx, y_top)).down(y_top - y_bot)
 
-        # Horizontal wire segments + I/O pins
-        pin_idx = 0
+        # Horizontal wire segments
         for hi, hcy in enumerate(h_cy):
             for w in range(h_wire_count):
                 wy = hcy + h_bw / 2 - w * wire_pitch
@@ -216,22 +224,49 @@ def draw_fpga(cfg, filename='fpga.svg', base_fig=False):
                     x_right = v_cx[vi + 1] - sb / 2
                     elm.Line().at((x_left, wy)).right(x_right - x_left)
 
-            wy_center = hcy
+        # ── I/O ports ─────────────────────────────────────────
+        pin_idx = 0
+
+        # Left side (one per H channel)
+        for hi, hcy in enumerate(h_cy):
+            wy = hcy
             elm.Line().at(
-                (v_cx[0] - sb / 2 - stub_len, wy_center)).right(stub_len)
+                (v_cx[0] - sb / 2 - stub_len, wy)).right(stub_len)
             elm.Label().at(
-                (v_cx[0] - sb / 2 - stub_len, wy_center)).label(
-                    f'$\\mathrm{{P_{{{pin_idx}}}}}$', loc='top')
+                (v_cx[0] - sb / 2 - stub_len, wy)).label(
+                    f'$\\mathrm{{P_{{{pin_idx}}}}}$', loc='top', fontsize=12)
             pin_idx += 1
 
-            elm.Line().at(
-                (v_cx[-1] + sb / 2, wy_center)).right(stub_len)
+        # Top edge: inputs on non-corner interior SBs
+        for vi in range(1, len(v_cx) - 1):
+            vcx = v_cx[vi]
+            elm.Line().at((vcx, h_cy[0] + sb / 2)).up(stub_len)
             elm.Label().at(
-                (v_cx[-1] + sb / 2 + stub_len, wy_center)).label(
-                    f'$\\mathrm{{P_{{{pin_idx}}}}}$', loc='top')
+                (vcx, h_cy[0] + sb / 2 + stub_len)).label(
+                    f'$\\mathrm{{P_{{{pin_idx}}}}}$', loc='top', fontsize=12)
             pin_idx += 1
 
-        # FPGA outer border
+        # Right side (one per H channel)
+        for hi, hcy in enumerate(h_cy):
+            wy = hcy
+            elm.Line().at(
+                (v_cx[-1] + sb / 2, wy)).right(stub_len)
+            elm.Label().at(
+                (v_cx[-1] + sb / 2 + stub_len, wy)).label(
+                    f'$\\mathrm{{P_{{{pin_idx}}}}}$', loc='top', fontsize=12)
+            pin_idx += 1
+
+        # Bottom edge: non-corner interior SBs
+        for vi in range(1, len(v_cx) - 1):
+            vcx = v_cx[vi]
+            elm.Line().at(
+                (vcx, h_cy[-1] - sb / 2)).down(stub_len)
+            elm.Label().at(
+                (vcx, h_cy[-1] - sb / 2 - stub_len)).label(
+                    f'$\\mathrm{{P_{{{pin_idx}}}}}$', loc='bottom', fontsize=12)
+            pin_idx += 1
+
+        # ── FPGA outer border ─────────────────────────────────
         fpga_pad = 0.4
         fpga_left = v_cx[0] - sb / 2 - fpga_pad
         fpga_right = v_cx[-1] + sb / 2 + fpga_pad
@@ -241,31 +276,39 @@ def draw_fpga(cfg, filename='fpga.svg', base_fig=False):
         flow.Box(w=fpga_right - fpga_left, h=fpga_top - fpga_bot,
                  lw=2).anchor('NW')
 
-        # Fixed connections: vertical wires <-> CLB pins
+        # ── Fixed connections: vertical wires <-> CLB pins ────
         for r in range(n_clb_rows):
             cy = clb_oy[r]
             for vi in range(len(v_cx)):
                 bw = v_bw[vi]
+                inp_off = cfg.clb_input_wire_offset(vi)
+
                 if vi == 0:
+                    # Left channel: CLB inputs on wires inp_off..inp_off+n-1
                     for i in range(n_inputs):
-                        wx = v_cx[0] - bw / 2 + i * wire_pitch
+                        wx = v_cx[0] - bw / 2 + (inp_off + i) * wire_pitch
                         pin_x = clb_ox[0] + in_dx
                         pin_y = cy + in_dy[i]
                         elm.Dot(radius=0.06).at((wx, pin_y))
                         elm.Line().at((wx, pin_y)).right(pin_x - wx)
+
                 elif vi <= n_clb_cols - 1:
+                    # Interior: wire 0 = CLB output, wires inp_off.. = CLB inputs
                     wx0 = v_cx[vi] - bw / 2
                     pin_x = clb_ox[vi - 1] + out_dx
                     pin_y = cy + out_dy
                     elm.Line().at((pin_x, pin_y)).right(wx0 - pin_x)
                     elm.Dot(radius=0.06).at((wx0, pin_y))
+
                     for i in range(n_inputs):
-                        wx = v_cx[vi] - bw / 2 + (i + 1) * wire_pitch
+                        wx = v_cx[vi] - bw / 2 + (inp_off + i) * wire_pitch
                         pin_x = clb_ox[vi] + in_dx
                         pin_y = cy + in_dy[i]
                         elm.Dot(radius=0.06).at((wx, pin_y))
                         elm.Line().at((wx, pin_y)).right(pin_x - wx)
+
                 else:
+                    # Right channel: wire 0 = CLB output
                     wx0 = v_cx[vi] - bw / 2
                     pin_x = clb_ox[vi - 1] + out_dx
                     pin_y = cy + out_dy
@@ -300,21 +343,59 @@ def _draw_config(d, cfg, clbs, v_cx, h_cy, v_bw, h_bw, sb, wire_pitch):
             str(sel), color='black')
 
     # Switch box connections
+    n_v_ch = cfg.n_v_channels
+    n_h_ch = cfg.n_h_channels
+
     def sb_port_pos(vi, hi, port):
+        """Return (x, y) of a named port on an SB edge.
+
+        Edge SBs with a single I/O port (L0 on left, R0 on right,
+        T0 on top non-corner, B0 on bottom non-corner) are centered
+        in the SB rather than placed at the first wire position.
+        """
         vcx, hcy = v_cx[vi], h_cy[hi]
         side, idx = port[0], int(port[1:])
+
         if side in ('T', 'B'):
-            bw = v_bw[vi]
-            px = vcx - bw / 2 + idx * wire_pitch
+            # Top-edge non-corner or bottom-edge non-corner: single centered port
+            if (side == 'T' and hi == 0 and 0 < vi < n_v_ch - 1) or \
+               (side == 'B' and hi == n_h_ch - 1 and 0 < vi < n_v_ch - 1):
+                px = vcx
+            else:
+                bw = v_bw[vi]
+                px = vcx - bw / 2 + idx * wire_pitch
             py = hcy + sb / 2 if side == 'T' else hcy - sb / 2
         else:
             px = vcx - sb / 2 if side == 'L' else vcx + sb / 2
-            py = hcy + h_bw / 2 - idx * wire_pitch
+            # Left-edge or right-edge: single centered port
+            if (side == 'L' and vi == 0) or \
+               (side == 'R' and vi == n_v_ch - 1):
+                py = hcy
+            else:
+                py = hcy + h_bw / 2 - idx * wire_pitch
         return px, py
 
     for (vi, hi), conns in cfg.sbs.items():
+        vcx, hcy = v_cx[vi], h_cy[hi]
         for p1_name, p2_name in conns:
             x1, y1 = sb_port_pos(vi, hi, p1_name)
             x2, y2 = sb_port_pos(vi, hi, p2_name)
-            d.here = Point((x1, y1))
-            elm.Line().to(Point((x2, y2)))
+
+            # Same-side connections: draw arc bowing toward SB center
+            if p1_name[0] == p2_name[0]:
+                mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+                bow = 0.5
+                ctrl_x = mx + bow * (vcx - mx)
+                ctrl_y = my + bow * (hcy - my)
+                d.here = Point((x1, y1))
+                arc = elm.Element().theta(0)
+                arc.segments.append(
+                    SegmentBezier(
+                        [(0, 0),
+                         (ctrl_x - x1, ctrl_y - y1),
+                         (x2 - x1, y2 - y1)]))
+                d.add(arc)
+            else:
+                # Different sides: straight line
+                d.here = Point((x1, y1))
+                elm.Line().to(Point((x2, y2)))
